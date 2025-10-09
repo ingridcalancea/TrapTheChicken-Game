@@ -63,7 +63,6 @@ fn main() {
     }
 
     let mut i1: i32 = 1;
-    let mut j: i32 = 1;
 
     while i1 <= 100 {
         let mut j = 1;
