@@ -15,7 +15,7 @@ macro_rules! assert_eq_rel {
 use std::fmt;
 use std::ops::{Add, Sub, Mul, Neg};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Complex {
     pub real: f64,
     pub imag: f64,
