@@ -56,17 +56,47 @@ fn parse_coords(parts: &[&str]) -> Option<(usize, usize)> {
 
 fn computer_mouse_move(board: &Board, pos: (usize, usize)) -> Option<(usize, usize)> {
     let dirs = [(-1, 0), (0, 1), (1, 0), (0, -1)];
+    let mut best = None;
+    let mut best_score = i32::MIN;
+
     for (dx, dy) in dirs {
-        let nx = pos.0 as isize + dx -1;
-        let ny = pos.1 as isize + dy -1;
-        if nx >= 0 && ny >= 0 && nx < 7 && ny < 7 {
-            let (nx, ny) = (nx as usize, ny as usize);
-            if board[nx][ny] == Cell::Empty {
-                return Some((nx, ny));
+        let nx = pos.0 as isize + dx;
+        let ny = pos.1 as isize + dy;
+
+        if nx < 0 || ny < 0 || nx >= 7 || ny >= 7 {
+            // ieșire -> câștig maxim
+            return Some((nx.max(0) as usize, ny.max(0) as usize));
+        }
+
+        let (nx, ny) = (nx as usize, ny as usize);
+        if board[nx][ny] != Cell::Empty {
+            continue;
+        }
+
+        let dist = std::cmp::min(
+            std::cmp::min(nx, 6 - nx),
+            std::cmp::min(ny, 6 - ny),
+        ) as i32;
+
+        let mut free = 0;
+        for (ddx, ddy) in dirs {
+            let xx = nx as isize + ddx;
+            let yy = ny as isize + ddy;
+            if xx >= 0 && yy >= 0 && xx < 7 && yy < 7 {
+                if board[xx as usize][yy as usize] == Cell::Empty {
+                    free += 1;
+                }
             }
         }
+
+        let score = -10 * dist + 2 * free;
+        if score > best_score {
+            best_score = score;
+            best = Some((nx, ny));
+        }
     }
-    None
+
+    best
 }
 
 
@@ -96,7 +126,7 @@ fn mesaje(room: &mut Room) {
         } else {
             Role::Trapper
         };
-        // Markerii ajută clientul GUI să ignore restul textului
+        
         let msg = format!(
             "{}YOUR_ROLE: {:?}\nTURN: {:?}\nMODE: {:?}\n",
             board_str, player_role, room.turn, room.mode
@@ -113,7 +143,13 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, room_id:
             Ok(n) if n > 0 => {
                 let msg = String::from_utf8_lossy(&buffer[0..n]);
                 let parts: Vec<&str> = msg.split_whitespace().collect();
-                let mut state_lock = state.lock().unwrap();
+                let mut state_lock = match state.lock() {
+                    Ok(guard) => guard,
+                    Err(e) => {
+            eprintln!("Eroare mutex: {}", e);
+            return;
+        }
+};
                 let room = match state_lock.rooms.get_mut(room_id) {
                     Some(r) => r,
                     None => break,
@@ -154,7 +190,7 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, room_id:
                             _ => {}
                         }
                         if move_made {
-                            mesaje(room); // Trimite update imediat ambilor jucători
+                            mesaje(room);
                         }
                     }
                 }
@@ -201,7 +237,10 @@ fn main() {
 
                     let mut state_lock = match state_clone.lock() {
                         Ok(lock) => lock,
-                        Err(poisoned) => poisoned.into_inner(),
+                        Err(e) => {
+                            eprintln!("Eroare mutex: {}", e);
+            return;
+        },
                     };
 
                     let (final_id, player_idx) = if mode == Mode::Human {

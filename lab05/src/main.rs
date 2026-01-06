@@ -49,7 +49,7 @@ fn new_canvas() -> Vec<Vec<char>> {
 fn set_pixels(canvas: &mut [Vec<char>], draw: &[(usize, usize, u8)]) {
     for &(x, y, a) in draw {
         if y < 55 && x < 100 {
-            canvas[y][x] = a as char;
+            canvas[x][y] = a as char;
         }
     }
 }
@@ -106,7 +106,7 @@ fn pb3(fisier: &str) -> Result<(), io::Error> {
 
 
 fn main() {
-    if let Err(e) = pb1("fisier.txt") {
+    if let Err(e) = pb1("fisie6r.txt") {
         println!("error: {} ", e);
     }
 
@@ -151,7 +151,7 @@ fn main() {
 
     print(canvas);
 
-    if let Err(e) = pb3("fisier.json") {
+    if let Err(e) = pb3("fisier2.txt") {
         println!("error: {} ", e);
     }
 }

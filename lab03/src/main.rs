@@ -35,19 +35,46 @@ fn multiplication(x: u32, y: u32) -> u32 {
     }
 }
 
-fn addition_r(x: u32, y: u32) -> Result<u32, &'static str> {
+#[derive(Debug)]
+enum ErrorOp {
+    Addit,
+    Mutipl,
+}
+
+fn addition_r(x: u32, y: u32) -> Result<u32, ErrorOp> {
     if (x as u64 + y as u64) < u32::MAX as u64 {
         Ok(x + y)
     } else {
-        Err("!!!!the value doesnt fit in an u32!!!!")
+        Err(ErrorOp::Addit)
     }
 }
 
-fn multiplication_r(x: u32, y: u32) -> Result<u32, &'static str> {
+fn multiplication_r(x: u32, y: u32) -> Result<u32, ErrorOp> {
     if (x as u64 * y as u64) < u32::MAX as u64 {
         Ok(x * y)
     } else {
-        Err("!!!!the value doesnt fit in an u32!!!!")
+        Err(ErrorOp::Mutipl)
+    }
+}
+
+fn compute_op(a :u32, b:u32) -> Result<(u32, u32), ErrorOp>
+{
+    let add = addition_r(a, b)?;
+    let mult = multiplication_r(a,b)?;
+    Ok((add, mult))
+}
+
+fn op()
+{
+    match compute_op(1234, 45678){
+        Ok((a,b)) => println!("sum: {}, multpl: {}", a, b),
+       Err(ErrorOp::Addit)=>println!("eraore la adunare"),
+       Err(ErrorOp::Mutipl)=>println!("eroare la inmultire"),
+    }
+    match compute_op(1234564, 45345678){
+        Ok((a,b)) => println!("sum: {}, multpl: {}", a, b),
+       Err(ErrorOp::Addit)=>println!("eraore la adunare"),
+       Err(ErrorOp::Mutipl)=>println!("eroare la inmultire"),
     }
 }
 
@@ -137,34 +164,7 @@ fn main() {
     }
 
     //3
-    let a = 2000000000;
-    let b = 1500000000;
-
-    match addition_r(a, b) {
-        Ok(result) => println!("Suma lui {} + {} = {}", a, b, result),
-        Err(e) => println!("Eroare la adunare: {}", e),
-    }
-
-    let x = 50000;
-    let y = 100000;
-
-    match multiplication_r(x, y) {
-        Ok(result) => println!("Produsul lui {} * {} = {}", x, y, result),
-        Err(e) => println!("Eroare la înmulțire: {}", e),
-    }
-
-    let p = 90000000;
-    let q = 90000000;
-
-    match addition_r(p, q) {
-        Ok(result) => println!("Suma lui {} + {} = {}", p, q, result),
-        Err(e) => println!("Eroare la adunare: {}", e),
-    }
-
-    match multiplication_r(p, q) {
-        Ok(result) => println!("Produsul lui {} * {} = {}", p, q, result),
-        Err(e) => println!("Eroare la înmulțire: {}", e),
-    }
+    op();
 
     //4
 
