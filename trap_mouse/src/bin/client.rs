@@ -1,6 +1,9 @@
 use eframe::egui;
+use egui::{FontData, FontDefinitions, FontFamily, FontId, TextureHandle};
+use egui::Color32;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -12,6 +15,12 @@ enum ServerEvent {
 enum AppState {
     ChooseMode,
     InGame,
+    GameOver(GameResult),
+}
+
+enum GameResult {
+    Win,
+    Lose,
 }
 
 struct TrapApp {
@@ -21,6 +30,14 @@ struct TrapApp {
     receiver: Option<Receiver<ServerEvent>>,
     board_raw: String,
     status_msg: String,
+
+    tex_mouse: Option<TextureHandle>,
+    tex_wall: Option<TextureHandle>,
+    tex_empty: Option<TextureHandle>,
+
+    bg_menu: Option<TextureHandle>,
+    bg_game: Option<TextureHandle>,
+    bg_gameover: Option<TextureHandle>,
 }
 
 impl TrapApp {
@@ -32,17 +49,7 @@ impl TrapApp {
             Ok(mut stream) => {
                 let _ = stream.write_all(mode.as_bytes());
 
-        let mut read_stream = match stream.try_clone() {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = tx.send(ServerEvent::Disconnected(format!(
-                "Eroare clonare stream: {}",
-                e
-        )));
-        return (None, rx, format!("Eroare clonare stream: {}", e));
-            }
-        };
-
+                let mut read_stream = stream.try_clone().unwrap();
                 let tx_clone = tx.clone();
 
                 thread::spawn(move || {
@@ -65,9 +72,17 @@ impl TrapApp {
 
                 (Some(stream), rx, "Conectat!".to_string())
             }
-            Err(e) => (None, rx, format!("Server offline: {}", e)),
+            Err(e) => (None, rx, e.to_string()),
         }
     }
+}
+
+fn load_texture(ctx: &egui::Context, path: &str, name: &str) -> TextureHandle {
+    let img = image::open(path).expect(path).to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let pixels = img.into_raw();
+    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+    ctx.load_texture(name, color_image, egui::TextureOptions::LINEAR)
 }
 
 fn extract_value(raw: &str, key: &str) -> Option<String> {
@@ -76,73 +91,196 @@ fn extract_value(raw: &str, key: &str) -> Option<String> {
         .map(|l| l.replace(key, "").trim().to_string())
 }
 
+fn draw_background(ui: &egui::Ui, tex: &TextureHandle) {
+    let rect = ui.max_rect();
+    ui.painter().image(
+        tex.id(),
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+}
+
 impl eframe::App for TrapApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let mut receiver = self.receiver.take();
-        let mut disconnected = None;
+        if self.tex_mouse.is_none() {
+            self.tex_mouse = Some(load_texture(ctx, "blocuri/mouse.png", "mouse"));
+            self.tex_wall = Some(load_texture(ctx, "blocuri/wall.png", "wall"));
+            self.tex_empty = Some(load_texture(ctx, "blocuri/empty.png", "empty"));
 
-        if let Some(rx) = receiver.as_ref() {
+            self.bg_menu = Some(load_texture(ctx, "blocuri/bg_menu.png", "bg_menu"));
+            self.bg_game = Some(load_texture(ctx, "blocuri/bg_game.png", "bg_game"));
+            self.bg_gameover = Some(load_texture(ctx, "blocuri/bg_gameover.png", "bg_gameover"));
+        }
+
+        let mut fonts = FontDefinitions::default();
+
+        fonts.font_data.insert(
+            "ComicSans".to_owned(),
+            Arc::new(FontData::from_static(include_bytes!(
+                "../../blocuri/ComicSansMS.ttf"
+            ))),
+        );
+
+        fonts
+            .families
+            .get_mut(&FontFamily::Proportional)
+            .unwrap()
+            .insert(0, "ComicSans".to_owned());
+
+        ctx.set_fonts(fonts);
+
+        if let Some(rx) = &self.receiver {
+            let mut events = vec![];
             while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+
+            for event in events {
                 match event {
                     ServerEvent::BoardUpdate(msg) => {
-                        self.board_raw = msg;
-                        self.state = AppState::InGame;
+                        if let Some(r) = extract_value(&msg, "GAME_OVER: ") {
+                            self.state = match r.as_str() {
+                                "WIN" => AppState::GameOver(GameResult::Win),
+                                "LOSE" => AppState::GameOver(GameResult::Lose),
+                                _ => AppState::InGame,
+                            };
+                        } else {
+                            self.board_raw = msg;
+                            self.state = AppState::InGame;
+                        }
                     }
                     ServerEvent::Disconnected(err) => {
-                        disconnected = Some(err);
-                        break;
+                        self.status_msg = err;
+                        self.stream = None;
+                        self.receiver = None;
+                        self.state = AppState::ChooseMode;
                     }
                 }
-                ctx.request_repaint();
             }
         }
 
-        if let Some(err) = disconnected {
-            self.status_msg = err;
-            self.stream = None;
-            receiver = None;
-            self.state = AppState::ChooseMode;
-        }
-
-        self.receiver = receiver;
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("🐭 Șoarecele și Capcana 🧱");
-            ui.separator();
-
+        egui::CentralPanel::default().show(ctx, |ui|  {
             if matches!(self.state, AppState::ChooseMode) {
-                ui.label("Alege modul de joc:");
+                draw_background(ui, self.bg_menu.as_ref().unwrap());
 
-                if ui.button("👤 Player vs Player").clicked() {
-                    self.chosen_mode = Some("1\n".to_string());
-                }
-                if ui.button("🤖 Player vs Computer").clicked() {
-                    self.chosen_mode = Some("2\n".to_string());
-                }
+                ui.vertical_centered(|ui| {
+                    ui.add_space(140.0);
 
-                if let Some(mode) = &self.chosen_mode {
-                    if ui.button("🔌 Conectează-te").clicked() {
-                        let (s, rx, msg) = TrapApp::connect_and_send_mode(mode);
-                        self.stream = s;
-                        self.receiver = Some(rx);
-                        self.status_msg = msg;
+                    ui.heading(egui::RichText::new(" ").size(48.0));
+
+                    ui.add_space(325.0);
+
+                    
+
+                    if ui
+                        .add_sized(
+                            [260.0, 60.0],
+                            egui::Button::new(
+                                egui::RichText::new("Player vs Player")
+                                    .font(FontId::new(24.0, FontFamily::Proportional))
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(0, 180, 0)),
+                        )
+                        .clicked()
+                    {
+                        self.chosen_mode = Some("1\n".to_string());
                     }
-                }
 
-                ui.label(&self.status_msg);
+                    ui.add_space(20.0);
+
+                    if ui
+                        .add_sized(
+                            [260.0, 60.0],
+                            egui::Button::new(
+                                egui::RichText::new("Player vs Computer")
+                                    .font(FontId::new(24.0, FontFamily::Proportional))
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(0, 180, 0)),
+                        )
+                        .clicked()
+                    {
+                        self.chosen_mode = Some("2\n".to_string());
+                    }
+
+                    ui.add_space(30.0);
+
+                    if let Some(mode) = &self.chosen_mode && ui
+                            .add_sized(
+                                [200.0, 55.0],
+                                egui::Button::new(
+                                    egui::RichText::new("START")
+                                        .font(FontId::new(24.0, FontFamily::Proportional))
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(0, 180, 0)),
+                            )
+                            .clicked()
+                        {
+                            let (s, rx, msg) = TrapApp::connect_and_send_mode(mode);
+                            self.stream = s;
+                            self.chosen_mode = None;
+                            self.receiver = Some(rx);
+                            self.status_msg = msg;
+                        }
+                    
+
+                    ui.add_space(20.0);
+                    ui.label(&self.status_msg);
+                });
+
                 return;
             }
 
-            let my_role = extract_value(&self.board_raw, "YOUR_ROLE: ");
-            let turn = extract_value(&self.board_raw, "TURN: ");
-            let is_my_turn = my_role.as_deref() == turn.as_deref();
+            if let AppState::GameOver(result) = &self.state {
+                if let Some(bg) = self.bg_gameover.as_ref() {
+                    draw_background(ui, bg);
+                }
 
-            ui.label(format!(
-                "Rol: {} {}",
-                my_role.unwrap_or("?".into()),
-                if is_my_turn { "– RÂNDUL TĂU" } else { "" }
-            ));
+                ui.vertical_centered(|ui| {
+                    ui.add_space(220.0);
 
+                    match result {
+                        GameResult::Win => {
+                            ui.label(
+                                egui::RichText::new("AI CÂȘTIGAT:)")
+                                    .font(egui::FontId::new(50.0, egui::FontFamily::Proportional))
+                                    .color(egui::Color32::DARK_BLUE),
+                            );
+                        }
+                        GameResult::Lose => {
+                            ui.label(
+                                egui::RichText::new("AI PIERDUT:(")
+                                    .font(egui::FontId::new(50.0, egui::FontFamily::Proportional))
+                                    .color(egui::Color32::DARK_RED),
+                            );
+                        }
+                    }
+
+                    ui.add_space(30.0);
+                    ui.label(
+                        egui::RichText::new("Click oriunde pentru a reveni la meniu")
+                            .font(egui::FontId::new(25.0, egui::FontFamily::Proportional))
+                            .color(egui::Color32::DARK_GRAY)
+                            .strong(),
+                    );
+                });
+
+                if ctx.input(|i| i.pointer.any_click()) {
+                    self.state = AppState::ChooseMode;
+                    self.stream = None;
+                    self.receiver = None;
+                    self.board_raw.clear();
+                    self.status_msg.clear();
+                }
+                return;
+            }
+
+            draw_background(ui, self.bg_game.as_ref().unwrap());
+
+            ui.heading("Trap the chicken");
             ui.separator();
 
             let board_lines: Vec<&str> = self
@@ -156,27 +294,50 @@ impl eframe::App for TrapApp {
                 .lines()
                 .collect();
 
-            egui::Grid::new("board").show(ui, |ui| {
-                for x in 0..7 {
-                    for y in 0..7 {
+            let your_role =
+                extract_value(&self.board_raw, "YOUR_ROLE: ").unwrap_or("Unknown".to_string());
+            let turn = extract_value(&self.board_raw, "TURN: ").unwrap_or("Unknown".to_string());
+
+            ui.label(format!("Your role: {}", your_role));
+            ui.label(format!("Current turn: {}", turn));
+            ui.add_space(10.0);
+
+            egui::Grid::new("board").spacing([4.0, 4.0]).show(ui, |ui| {
+                for x in 0..11 {
+                    for y in 0..11 {
                         let c = board_lines
                             .get(x)
                             .and_then(|l| l.chars().nth(y))
                             .unwrap_or('.');
-
-                        let label = match c {
-                            'M' => "🐭",
-                            '#' => "🧱",
-                            _ => "·",
+                        let tex = match c {
+                            'M' => &self.tex_mouse,
+                            '#' => &self.tex_wall,
+                            _ => &self.tex_empty,
                         };
 
-                        if ui.button(label).clicked() && is_my_turn {
-                            if let Some(ref mut s) = self.stream {
-                                let _ = s.write_all(
-                                    format!("MOVE {} {}\n", x, y).as_bytes(),
-                                );
-                            }
+                        let resp = if let Some(tex) = tex.as_ref() {
+                            ui.add(
+                                egui::Button::image(tex)
+                                    .min_size(egui::vec2(48.0, 48.0))
+                                    .frame(false),
+                            )
+                        } else {
+                            return;
+                        };
+
+                        if resp.hovered() {
+                            ui.painter().rect_filled(
+                                resp.rect,
+                                0.0,
+                                egui::Color32::from_rgba_unmultiplied(255, 255, 0, 100),
+                            );
                         }
+
+                        if resp.clicked() 
+                            && let Some(s) = &mut self.stream {
+                                let _ = s.write_all(format!("MOVE {} {}\n", x, y).as_bytes());
+                            }
+                        
                     }
                     ui.end_row();
                 }
@@ -186,9 +347,16 @@ impl eframe::App for TrapApp {
 }
 
 fn main() -> eframe::Result<()> {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([760.0, 850.0])
+            .with_min_inner_size([500.0, 600.0]),
+        ..Default::default()
+    };
+
     eframe::run_native(
-        "Client Capcana",
-        eframe::NativeOptions::default(),
+        "Trap the chicken",
+        options,
         Box::new(|_cc| {
             Ok(Box::new(TrapApp {
                 state: AppState::ChooseMode,
@@ -197,6 +365,12 @@ fn main() -> eframe::Result<()> {
                 receiver: None,
                 board_raw: String::new(),
                 status_msg: String::new(),
+                tex_mouse: None,
+                tex_wall: None,
+                tex_empty: None,
+                bg_menu: None,
+                bg_game: None,
+                bg_gameover: None,
             }))
         }),
     )

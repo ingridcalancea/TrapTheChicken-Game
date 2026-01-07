@@ -1,3 +1,4 @@
+use rand::Rng;
 use std::{
     env,
     io::{BufRead, BufReader, Read, Write},
@@ -12,20 +13,18 @@ enum Cell {
     Trap,
     Mouse,
 }
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Role {
     Trapper,
     Mouse,
 }
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Mode {
     Human,
     Computer,
 }
 
-type Board = [[Cell; 7]; 7];
+type Board = [[Cell; 11]; 11];
 
 struct Room {
     mode: Mode,
@@ -40,8 +39,24 @@ struct ServerState {
 }
 
 fn initial_board() -> Board {
-    let mut board = [[Cell::Empty; 7]; 7];
-    board[3][3] = Cell::Mouse;
+    let mut board = [[Cell::Empty; 11]; 11];
+    let mut rng = rand::thread_rng();
+
+    board[5][5] = Cell::Mouse;
+
+    let walls = rng.gen_range(5..=12);
+    let mut placed = 0;
+
+    while placed < walls {
+        let x = rng.gen_range(0..11);
+        let y = rng.gen_range(0..11);
+
+        if board[x][y] == Cell::Empty {
+            board[x][y] = Cell::Trap;
+            placed += 1;
+        }
+    }
+
     board
 }
 
@@ -51,43 +66,64 @@ fn parse_coords(parts: &[&str]) -> Option<(usize, usize)> {
     }
     let x = parts[1].parse::<usize>().ok()?;
     let y = parts[2].parse::<usize>().ok()?;
-    if x < 7 && y < 7 { Some((x, y)) } else { None }
+    if x < 11 && y < 11 { Some((x, y)) } else { None }
+}
+
+fn mouse_can_move(board: &Board, pos: (usize, usize)) -> bool {
+    let dirs = [
+        (-1, 0),
+        (0, 1),
+        (1, 0),
+        (0, -1),
+        (-1, -1),
+        (1, 1),
+        (-1, 1),
+        (1, -1),
+    ];
+    dirs.iter().any(|(dx, dy)| {
+        let nx = pos.0 as isize + dx;
+        let ny = pos.1 as isize + dy;
+        nx >= 0 && ny >= 0 && nx < 11 && ny < 11 && board[nx as usize][ny as usize] == Cell::Empty
+    })
 }
 
 fn computer_mouse_move(board: &Board, pos: (usize, usize)) -> Option<(usize, usize)> {
-    let dirs = [(-1, 0), (0, 1), (1, 0), (0, -1)];
+    let dirs = [
+        (-1, 0),
+        (0, 1),
+        (1, 0),
+        (0, -1),
+        (-1, -1),
+        (1, 1),
+        (-1, 1),
+        (1, -1),
+    ];
     let mut best = None;
     let mut best_score = i32::MIN;
 
     for (dx, dy) in dirs {
         let nx = pos.0 as isize + dx;
         let ny = pos.1 as isize + dy;
-
-        if nx < 0 || ny < 0 || nx >= 7 || ny >= 7 {
-            // ieșire -> câștig maxim
-            return Some((nx.max(0) as usize, ny.max(0) as usize));
+        if nx < 0 || ny < 0 || nx >= 11 || ny >= 11 {
+            continue;
         }
-
         let (nx, ny) = (nx as usize, ny as usize);
         if board[nx][ny] != Cell::Empty {
             continue;
         }
-
-        let dist = std::cmp::min(
-            std::cmp::min(nx, 6 - nx),
-            std::cmp::min(ny, 6 - ny),
-        ) as i32;
-
-        let mut free = 0;
-        for (ddx, ddy) in dirs {
-            let xx = nx as isize + ddx;
-            let yy = ny as isize + ddy;
-            if xx >= 0 && yy >= 0 && xx < 7 && yy < 7 {
-                if board[xx as usize][yy as usize] == Cell::Empty {
-                    free += 1;
-                }
-            }
-        }
+        let dist = std::cmp::min(std::cmp::min(nx, 10 - nx), std::cmp::min(ny, 10 - ny)) as i32;
+        let free = dirs
+            .iter()
+            .filter(|(ddx, ddy)| {
+                let xx = nx as isize + ddx;
+                let yy = ny as isize + ddy;
+                xx >= 0
+                    && yy >= 0
+                    && xx < 11
+                    && yy < 11
+                    && board[xx as usize][yy as usize] == Cell::Empty
+            })
+            .count() as i32;
 
         let score = -10 * dist + 2 * free;
         if score > best_score {
@@ -95,20 +131,17 @@ fn computer_mouse_move(board: &Board, pos: (usize, usize)) -> Option<(usize, usi
             best = Some((nx, ny));
         }
     }
-
     best
 }
-
-
 fn serialize_board(board: &Board) -> String {
     let mut s = String::from("BOARD_START\n");
     for row in board.iter() {
         for cell in row.iter() {
-            match cell {
-                Cell::Empty => s.push('.'),
-                Cell::Trap => s.push('#'),
-                Cell::Mouse => s.push('M'),
-            }
+            s.push(match cell {
+                Cell::Empty => '.',
+                Cell::Trap => '#',
+                Cell::Mouse => 'M',
+            });
         }
         s.push('\n');
     }
@@ -118,96 +151,122 @@ fn serialize_board(board: &Board) -> String {
 
 fn mesaje(room: &mut Room) {
     let board_str = serialize_board(&room.board);
+    let mouse_won = room.mouse_pos.0 == 0
+        || room.mouse_pos.0 == 10
+        || room.mouse_pos.1 == 0
+        || room.mouse_pos.1 == 10;
+    let mouse_lost = !mouse_can_move(&room.board, room.mouse_pos);
+
     for (i, p) in room.players.iter_mut().enumerate() {
         let player_role = if room.mode == Mode::Computer {
-            Role::Trapper
+            if i == 0 { Role::Trapper } else { Role::Mouse }
         } else if i == 0 {
-            Role::Mouse
-        } else {
             Role::Trapper
+        } else {
+            Role::Mouse
         };
-        
+        let game_over_msg = if mouse_won {
+            if player_role == Role::Mouse {
+                "GAME_OVER: WIN\n"
+            } else {
+                "GAME_OVER: LOSE\n"
+            }
+        } else if mouse_lost {
+            if player_role == Role::Mouse {
+                "GAME_OVER: LOSE\n"
+            } else {
+                "GAME_OVER: WIN\n"
+            }
+        } else {
+            ""
+        };
         let msg = format!(
-            "{}YOUR_ROLE: {:?}\nTURN: {:?}\nMODE: {:?}\n",
-            board_str, player_role, room.turn, room.mode
+            "{}{}YOUR_ROLE: {:?}\nTURN: {:?}\nMODE: {:?}\n",
+            board_str, game_over_msg, player_role, room.turn, room.mode
         );
         let _ = p.write_all(msg.as_bytes());
         let _ = p.flush();
     }
 }
 
-fn handle_client(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, room_id: usize, player_idx: usize) {
+fn computer_move_if_needed(room: &mut Room) {
+    if room.mode == Mode::Computer && room.turn == Role::Mouse {
+        if let Some(new_pos) = computer_mouse_move(&room.board, room.mouse_pos) {
+            room.board[room.mouse_pos.0][room.mouse_pos.1] = Cell::Empty;
+            room.board[new_pos.0][new_pos.1] = Cell::Mouse;
+            room.mouse_pos = new_pos;
+        }
+        room.turn = Role::Trapper;
+        mesaje(room);
+    }
+}
+
+fn handle_client(
+    mut stream: TcpStream,
+    state: Arc<Mutex<ServerState>>,
+    room_id: usize,
+    player_idx: usize,
+) {
     let mut buffer = [0; 1024];
     loop {
         match stream.read(&mut buffer) {
             Ok(n) if n > 0 => {
                 let msg = String::from_utf8_lossy(&buffer[0..n]);
                 let parts: Vec<&str> = msg.split_whitespace().collect();
-                let mut state_lock = match state.lock() {
-                    Ok(guard) => guard,
-                    Err(e) => {
-            eprintln!("Eroare mutex: {}", e);
-            return;
-        }
-};
+                let mut state_lock = state.lock().unwrap();
                 let room = match state_lock.rooms.get_mut(room_id) {
                     Some(r) => r,
                     None => break,
                 };
+                let my_role = if room.mode == Mode::Computer || (room.mode == Mode::Human && player_idx == 0){
+                    Role::Trapper
+                } else {
+                    Role::Mouse
+                };
 
-                let my_role = if room.mode == Mode::Computer { Role::Trapper } 
-                             else if player_idx == 0 { Role::Mouse } 
-                             else { Role::Trapper };
+                if let (Some(&"MOVE"), Some((x, y))) = (parts.first(), parse_coords(&parts)) 
+                    && room.turn == my_role {
 
-                if let (Some(&"MOVE"), Some((x, y))) = (parts.get(0), parse_coords(&parts)) {
-                    if room.turn == my_role {
-                        let mut move_made = false;
-                        match (my_role, room.board[x][y]) {
+                        match (my_role, room.board[x][y])  {
                             (Role::Trapper, Cell::Empty) => {
                                 room.board[x][y] = Cell::Trap;
                                 room.turn = Role::Mouse;
-                                move_made = true;
-                                if room.mode == Mode::Computer {
-                                    if let Some(new_pos) = computer_mouse_move(&room.board, room.mouse_pos) {
-                                        room.board[room.mouse_pos.0][room.mouse_pos.1] = Cell::Empty;
-                                        room.board[new_pos.0][new_pos.1] = Cell::Mouse;
-                                        room.mouse_pos = new_pos;
-                                    }
-                                    room.turn = Role::Trapper;
-                                }
+                                computer_move_if_needed(room);
                             }
                             (Role::Mouse, Cell::Empty) => {
                                 let dx = (x as isize - room.mouse_pos.0 as isize).abs();
                                 let dy = (y as isize - room.mouse_pos.1 as isize).abs();
-                                if (dx == 1 && dy == 0) || (dx == 0 && dy == 1) || (dx == 1 && dy == 1){
+                                if (dx == 1 && dy == 0)
+                                    || (dx == 0 && dy == 1)
+                                    || (dx == 1 && dy == 1)
+                                {
                                     room.board[room.mouse_pos.0][room.mouse_pos.1] = Cell::Empty;
                                     room.board[x][y] = Cell::Mouse;
                                     room.mouse_pos = (x, y);
                                     room.turn = Role::Trapper;
-                                    move_made = true;
+
                                 }
                             }
                             _ => {}
                         }
-                        if move_made {
-                            mesaje(room);
-                        }
+                        mesaje(room);
                     }
-                }
+                
             }
             _ => break,
         }
     }
 }
+
 fn main() {
     let addr = env::args()
         .nth(1)
         .unwrap_or_else(|| "127.0.0.1:9090".to_string());
-
+    
     let listener = match TcpListener::bind(&addr) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("Eroare bind: {}", e);
+            eprintln!("Nu se poate deschide listener pe {}: {}", addr, e);
             return;
         }
     };
@@ -215,85 +274,98 @@ fn main() {
     let state = Arc::new(Mutex::new(ServerState { rooms: Vec::new() }));
 
     println!("Server pornit pe {}", addr);
+    for stream_result in listener.incoming() {
+        let stream = match stream_result {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("eroare la acceptare client: {}", e);
+                continue;
+            }
+        };
 
-    for stream in listener.incoming() {
-        if let Ok(s) = stream {
-            let state_clone = Arc::clone(&state);
+        let state_clone = Arc::clone(&state);
+        thread::spawn(move || {
+            let cloned_stream = match stream.try_clone() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("eroare la clonare steam: {}", e);
+                    return;
+                }
+            };
 
-            thread::spawn(move || {
-                let stream_for_reader = match s.try_clone() {
-                    Ok(cloned) => cloned,
-                    Err(_) => return,
-                };
+            let mut reader = BufReader::new(cloned_stream);
+            let mut choice = String::new();
+            if reader.read_line(&mut choice).is_err() {
+                eprintln!("eroare la decizia clientului");
+                return;
+            }
 
-                let mut reader = BufReader::new(stream_for_reader);
-                let mut choice = String::new();
+            let mode = match choice.trim() {
+                "2" => Mode::Computer,
+                _ => Mode::Human,
+            };
 
-                if reader.read_line(&mut choice).is_ok() {
-                    let mode = match choice.trim() {
-                        "2" => Mode::Computer,
-                        _ => Mode::Human,
-                    };
+            let mut state_lock = match state_clone.lock() {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("eroare la lockul starii serverului: {}", e);
+                    return;
+                }
+            };
 
-                    let mut state_lock = match state_clone.lock() {
-                        Ok(lock) => lock,
+            let (final_id, player_idx) = if mode == Mode::Human {
+                if let Some(id) = state_lock
+                    .rooms
+                    .iter()
+                    .position(|r| r.mode == Mode::Human && r.players.len() < 3)
+                {
+                    match stream.try_clone() {
+                        Ok(s_clone) => state_lock.rooms[id].players.push(s_clone),
                         Err(e) => {
-                            eprintln!("Eroare mutex: {}", e);
-            return;
-        },
-                    };
-
-                    let (final_id, player_idx) = if mode == Mode::Human {
-                        if let Some(id) = state_lock
-                            .rooms
-                            .iter()
-                            .position(|r| r.mode == Mode::Human && r.players.len() < 2)
-                        {
-                            if let Ok(cloned_s) = s.try_clone() {
-                                state_lock.rooms[id].players.push(cloned_s);
-                                (id, 1)
-                            } else {
-                                return;
-                            }
-                        } else {
-                            let new_id = state_lock.rooms.len();
-                            if let Ok(cloned_s) = s.try_clone() {
-                                state_lock.rooms.push(Room {
-                                    mode,
-                                    players: vec![cloned_s],
-                                    board: initial_board(),
-                                    mouse_pos: (3, 3),
-                                    turn: Role::Trapper,
-                                });
-                                (new_id, 0)
-                            } else {
-                                return;
-                            }
-                        }
-                    } else {
-                        let new_id = state_lock.rooms.len();
-                        if let Ok(cloned_s) = s.try_clone() {
-                            state_lock.rooms.push(Room {
-                                mode,
-                                players: vec![cloned_s],
-                                board: initial_board(),
-                                mouse_pos: (3, 3),
-                                turn: Role::Trapper,
-                            });
-                            (new_id, 0)
-                        } else {
+                            eprintln!("eroare streamul pentru al doilea jucator: {}", e);
                             return;
                         }
-                    };
-
-                    if let Some(room) = state_lock.rooms.get_mut(final_id) {
-                        mesaje(room);
                     }
-
-                    drop(state_lock);
-                    handle_client(s, state_clone, final_id, player_idx);
+                    (id, 1)
+                } else {
+                    let new_id = state_lock.rooms.len();
+                    match stream.try_clone() {
+                        Ok(s_clone) => state_lock.rooms.push(Room {
+                            mode,
+                            players: vec![s_clone],
+                            board: initial_board(),
+                            mouse_pos: (5, 5),
+                            turn: Role::Trapper,
+                        }),
+                        Err(e) => {
+                            eprintln!("eroare streamul pentru primul jucator: {}", e);
+                            return;
+                        }
+                    }
+                    (new_id, 0)
                 }
-            });
-        }
+            } else {
+                let new_id = state_lock.rooms.len();
+                match stream.try_clone() {
+                    Ok(s_clone) => state_lock.rooms.push(Room {
+                        mode,
+                        players: vec![s_clone],
+                        board: initial_board(),
+                        mouse_pos: (5, 5),
+                        turn: Role::Trapper,
+                    }),
+                    Err(e) => {
+                        eprintln!("eroare stream-ul pentru jucatorul uman: {}", e);
+                        return;
+                    }
+                }
+                (new_id, 0)
+            };
+
+            mesaje(&mut state_lock.rooms[final_id]);
+            drop(state_lock);
+
+            handle_client(stream, state_clone, final_id, player_idx);
+        });
     }
 }
