@@ -1,6 +1,6 @@
 use eframe::egui;
-use egui::{FontData, FontDefinitions, FontFamily, FontId, TextureHandle};
 use egui::Color32;
+use egui::{FontData, FontDefinitions, FontFamily, FontId, TextureHandle};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
@@ -49,7 +49,17 @@ impl TrapApp {
             Ok(mut stream) => {
                 let _ = stream.write_all(mode.as_bytes());
 
-                let mut read_stream = stream.try_clone().unwrap();
+                let mut read_stream = match stream.try_clone() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = tx.send(ServerEvent::Disconnected(format!(
+                            "Eroare la clonarea stream-ului: {}",
+                            e
+                        )));
+                        return (None, rx, "Nu s-a putut clona stream-ul".to_string());
+                    }
+                };
+
                 let tx_clone = tx.clone();
 
                 thread::spawn(move || {
@@ -122,11 +132,11 @@ impl eframe::App for TrapApp {
             ))),
         );
 
-        fonts
-            .families
-            .get_mut(&FontFamily::Proportional)
-            .unwrap()
-            .insert(0, "ComicSans".to_owned());
+        if let Some(family_vec) = fonts.families.get_mut(&FontFamily::Proportional) {
+            family_vec.insert(0, "ComicSans".to_owned());
+        } else {
+            eprintln!("eroare comic sans");
+        }
 
         ctx.set_fonts(fonts);
 
@@ -160,9 +170,13 @@ impl eframe::App for TrapApp {
             }
         }
 
-        egui::CentralPanel::default().show(ctx, |ui|  {
+        egui::CentralPanel::default().show(ctx, |ui| {
             if matches!(self.state, AppState::ChooseMode) {
-                draw_background(ui, self.bg_menu.as_ref().unwrap());
+                if let Some(bg) = self.bg_menu.as_ref() {
+                    draw_background(ui, bg);
+                } else {
+                    eprintln!("eroare bg_menu");
+                }
 
                 ui.vertical_centered(|ui| {
                     ui.add_space(140.0);
@@ -170,8 +184,6 @@ impl eframe::App for TrapApp {
                     ui.heading(egui::RichText::new(" ").size(48.0));
 
                     ui.add_space(325.0);
-
-                    
 
                     if ui
                         .add_sized(
@@ -207,7 +219,8 @@ impl eframe::App for TrapApp {
 
                     ui.add_space(30.0);
 
-                    if let Some(mode) = &self.chosen_mode && ui
+                    if let Some(mode) = &self.chosen_mode
+                        && ui
                             .add_sized(
                                 [200.0, 55.0],
                                 egui::Button::new(
@@ -218,14 +231,13 @@ impl eframe::App for TrapApp {
                                 .fill(Color32::from_rgb(0, 180, 0)),
                             )
                             .clicked()
-                        {
-                            let (s, rx, msg) = TrapApp::connect_and_send_mode(mode);
-                            self.stream = s;
-                            self.chosen_mode = None;
-                            self.receiver = Some(rx);
-                            self.status_msg = msg;
-                        }
-                    
+                    {
+                        let (s, rx, msg) = TrapApp::connect_and_send_mode(mode);
+                        self.stream = s;
+                        self.chosen_mode = None;
+                        self.receiver = Some(rx);
+                        self.status_msg = msg;
+                    }
 
                     ui.add_space(20.0);
                     ui.label(&self.status_msg);
@@ -278,7 +290,11 @@ impl eframe::App for TrapApp {
                 return;
             }
 
-            draw_background(ui, self.bg_game.as_ref().unwrap());
+            if let Some(bg) = self.bg_game.as_ref() {
+                    draw_background(ui, bg);
+                } else {
+                    eprintln!("eroare bg_game");
+                }
 
             ui.heading("Trap the chicken");
             ui.separator();
@@ -333,11 +349,11 @@ impl eframe::App for TrapApp {
                             );
                         }
 
-                        if resp.clicked() 
-                            && let Some(s) = &mut self.stream {
-                                let _ = s.write_all(format!("MOVE {} {}\n", x, y).as_bytes());
-                            }
-                        
+                        if resp.clicked()
+                            && let Some(s) = &mut self.stream
+                        {
+                            let _ = s.write_all(format!("MOVE {} {}\n", x, y).as_bytes());
+                        }
                     }
                     ui.end_row();
                 }

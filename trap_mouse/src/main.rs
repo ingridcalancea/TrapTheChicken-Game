@@ -213,45 +213,46 @@ fn handle_client(
             Ok(n) if n > 0 => {
                 let msg = String::from_utf8_lossy(&buffer[0..n]);
                 let parts: Vec<&str> = msg.split_whitespace().collect();
-                let mut state_lock = state.lock().unwrap();
+                let mut state_lock = match state.lock() {
+                    Ok(g) => g,
+                    Err(poison) => poison.into_inner(),
+                };
                 let room = match state_lock.rooms.get_mut(room_id) {
                     Some(r) => r,
                     None => break,
                 };
-                let my_role = if room.mode == Mode::Computer || (room.mode == Mode::Human && player_idx == 0){
+                let my_role = if room.mode == Mode::Computer
+                    || (room.mode == Mode::Human && player_idx == 0)
+                {
                     Role::Trapper
                 } else {
                     Role::Mouse
                 };
 
-                if let (Some(&"MOVE"), Some((x, y))) = (parts.first(), parse_coords(&parts)) 
-                    && room.turn == my_role {
-
-                        match (my_role, room.board[x][y])  {
-                            (Role::Trapper, Cell::Empty) => {
-                                room.board[x][y] = Cell::Trap;
-                                room.turn = Role::Mouse;
-                                computer_move_if_needed(room);
-                            }
-                            (Role::Mouse, Cell::Empty) => {
-                                let dx = (x as isize - room.mouse_pos.0 as isize).abs();
-                                let dy = (y as isize - room.mouse_pos.1 as isize).abs();
-                                if (dx == 1 && dy == 0)
-                                    || (dx == 0 && dy == 1)
-                                    || (dx == 1 && dy == 1)
-                                {
-                                    room.board[room.mouse_pos.0][room.mouse_pos.1] = Cell::Empty;
-                                    room.board[x][y] = Cell::Mouse;
-                                    room.mouse_pos = (x, y);
-                                    room.turn = Role::Trapper;
-
-                                }
-                            }
-                            _ => {}
+                if let (Some(&"MOVE"), Some((x, y))) = (parts.first(), parse_coords(&parts))
+                    && room.turn == my_role
+                {
+                    match (my_role, room.board[x][y]) {
+                        (Role::Trapper, Cell::Empty) => {
+                            room.board[x][y] = Cell::Trap;
+                            room.turn = Role::Mouse;
+                            computer_move_if_needed(room);
                         }
-                        mesaje(room);
+                        (Role::Mouse, Cell::Empty) => {
+                            let dx = (x as isize - room.mouse_pos.0 as isize).abs();
+                            let dy = (y as isize - room.mouse_pos.1 as isize).abs();
+                            if (dx == 1 && dy == 0) || (dx == 0 && dy == 1) || (dx == 1 && dy == 1)
+                            {
+                                room.board[room.mouse_pos.0][room.mouse_pos.1] = Cell::Empty;
+                                room.board[x][y] = Cell::Mouse;
+                                room.mouse_pos = (x, y);
+                                room.turn = Role::Trapper;
+                            }
+                        }
+                        _ => {}
                     }
-                
+                    mesaje(room);
+                }
             }
             _ => break,
         }
@@ -262,7 +263,7 @@ fn main() {
     let addr = env::args()
         .nth(1)
         .unwrap_or_else(|| "127.0.0.1:9090".to_string());
-    
+
     let listener = match TcpListener::bind(&addr) {
         Ok(l) => l,
         Err(e) => {
