@@ -1,0 +1,10 @@
+[package]
+name = "trap_mouse"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.33.3"
+image = "0.24"
+egui = "0.33.3"
+rand = "0.8"

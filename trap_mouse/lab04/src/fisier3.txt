@@ -1,0 +1,2 @@
+127.0.0.1 localhost efe
+192.168.0.10 myservere hsh ufhd
